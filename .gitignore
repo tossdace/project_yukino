@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+
+audio/
+*.wav
+
+character_files/config.yaml
+chat_history.json
+
+.env
