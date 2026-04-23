@@ -1,15 +1,22 @@
-import os
+import threading
+from pathlib import Path
+
+import numpy as np
 import sounddevice as sd
 import soundfile as sf
-import numpy as np
-from pathlib import Path
+
+
+def _wait_for_stop(stop_event: threading.Event):
+    input()
+    stop_event.set()
 
 
 def record_and_transcribe(
     model,
     output_file="recording.wav",
     samplerate=16000,
-    device=None
+    device=None,
+    blocksize=1024,
 ):
     """
     Push-to-talk recording:
@@ -19,6 +26,7 @@ def record_and_transcribe(
     """
 
     output_path = Path(output_file)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
 
     if output_path.exists():
         output_path.unlink()
@@ -26,47 +34,51 @@ def record_and_transcribe(
     print("Press ENTER to start recording...")
     input()
 
-    print("🔴 Recording... Press ENTER to stop")
+    print("Recording... Press ENTER to stop")
 
     recording = []
+    stop_event = threading.Event()
+    stop_listener = threading.Thread(
+        target=_wait_for_stop,
+        args=(stop_event,),
+        daemon=True,
+    )
+    stop_listener.start()
+
     stream = sd.InputStream(
         samplerate=samplerate,
         channels=1,
         dtype="float32",
-        device=device
+        device=device,
+        blocksize=blocksize,
     )
 
     with stream:
-        while True:
-            chunk, _ = stream.read(1024)
-            recording.append(chunk)
+        while not stop_event.is_set():
+            chunk, _ = stream.read(blocksize)
+            if chunk.size:
+                recording.append(chunk.copy())
 
-            if sd.wait(0):
-                pass
-
-            # Non-blocking stop check
-            if os.name == "nt":
-                import msvcrt
-                if msvcrt.kbhit():
-                    msvcrt.getch()
-                    break
-            else:
-                # fallback
-                break
+    if not recording:
+        return ""
 
     audio = np.concatenate(recording, axis=0)
 
-    print("⏹️  Saving audio...")
+    print("Saving audio...")
     sf.write(output_path, audio, samplerate)
 
-    print("🎯 Transcribing...")
+    print("Transcribing...")
 
     segments, _ = model.transcribe(
         str(output_path),
         beam_size=5
     )
 
-    transcription = " ".join(seg.text for seg in segments).strip()
+    transcription = " ".join(
+        seg.text.strip()
+        for seg in segments
+        if seg.text
+    ).strip()
 
     print(f"Transcription: {transcription}")
 

@@ -1,22 +1,24 @@
 import requests
-import yaml
 import soundfile as sf
 import sounddevice as sd
 
 from pathlib import Path
+
+from process.common.runtime_config import load_character_config, resolve_project_path
 
 
 # -------------------------
 # Load Config
 # -------------------------
 
-CONFIG_PATH = Path("character_files") / "config.yaml"
-
-with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-    char_config = yaml.safe_load(f)
+char_config = load_character_config()
 
 SOVITS_CFG = char_config["sovits_ping_config"]
 SERVER_URL = SOVITS_CFG.get("server_url", "http://127.0.0.1:9880/tts")
+REQUEST_TIMEOUT_SECONDS = 60
+
+
+_session = requests.Session()
 
 
 # -------------------------
@@ -28,8 +30,10 @@ def play_audio(path):
         data, samplerate = sf.read(path)
         sd.play(data, samplerate)
         sd.wait()
+        return True
     except Exception as e:
         print(f"[AUDIO ERROR] {e}")
+        return False
 
 
 # -------------------------
@@ -37,22 +41,25 @@ def play_audio(path):
 # -------------------------
 
 def sovits_gen(text: str, output_path="output.wav"):
+    cleaned_text = text.strip()
+    if not cleaned_text:
+        return None
 
     output_path = Path(output_path)
 
     payload = {
-        "text": text,
+        "text": cleaned_text,
         "text_lang": SOVITS_CFG["text_lang"],
-        "ref_audio_path": SOVITS_CFG["ref_audio_path"],
+        "ref_audio_path": str(resolve_project_path(SOVITS_CFG["ref_audio_path"])),
         "prompt_text": SOVITS_CFG["prompt_text"],
         "prompt_lang": SOVITS_CFG["prompt_lang"],
     }
 
     try:
-        response = requests.post(
+        response = _session.post(
             SERVER_URL,
             json=payload,
-            timeout=60
+            timeout=REQUEST_TIMEOUT_SECONDS
         )
 
         response.raise_for_status()

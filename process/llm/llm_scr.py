@@ -1,22 +1,18 @@
-import yaml
 import json
-import os
-from pathlib import Path
 from openai import OpenAI
+
+from process.common.runtime_config import load_character_config, resolve_project_path
 
 
 # -------------------------
 # Load Config
 # -------------------------
 
-CONFIG_PATH = Path("character_files") / "config.yaml"
-
-with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-    char_config = yaml.safe_load(f)
+char_config = load_character_config()
 
 API_KEY = char_config["OPENAI_API_KEY"]
 MODEL = char_config["model"]
-HISTORY_FILE = Path(char_config["history_file"])
+HISTORY_FILE = resolve_project_path(char_config["history_file"])
 
 SYSTEM_PROMPT_TEXT = char_config["presets"]["default"]["system_prompt"]
 
@@ -29,6 +25,7 @@ MAX_HISTORY_MESSAGES = 20
 # -------------------------
 
 _client = None
+_history_cache = None
 
 
 def get_client():
@@ -42,26 +39,62 @@ def get_client():
 # History Management
 # -------------------------
 
-def load_history():
-    if HISTORY_FILE.exists():
-        try:
-            with open(HISTORY_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            pass
-
-    # Default history with system prompt
+def _default_history():
     return [{
         "role": "system",
         "content": SYSTEM_PROMPT_TEXT
     }]
 
 
+def _normalize_history(history):
+    if not isinstance(history, list):
+        return _default_history()
+
+    sanitized_history = [
+        message for message in history
+        if isinstance(message, dict)
+        and isinstance(message.get("role"), str)
+        and isinstance(message.get("content"), str)
+    ]
+
+    if sanitized_history and sanitized_history[0]["role"] == "system":
+        sanitized_history[0] = {
+            "role": "system",
+            "content": SYSTEM_PROMPT_TEXT,
+        }
+        return sanitized_history
+
+    return _default_history() + sanitized_history
+
+
+def load_history(force_reload: bool = False):
+    global _history_cache
+
+    if _history_cache is not None and not force_reload:
+        return [message.copy() for message in _history_cache]
+
+    if HISTORY_FILE.exists():
+        try:
+            with HISTORY_FILE.open("r", encoding="utf-8") as file:
+                _history_cache = _normalize_history(json.load(file))
+                return [message.copy() for message in _history_cache]
+        except Exception:
+            pass
+
+    _history_cache = _default_history()
+    return [message.copy() for message in _history_cache]
+
+
 def save_history(history):
+    global _history_cache
+
+    history = trim_history(_normalize_history(history))
     HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(HISTORY_FILE, "w", encoding="utf-8") as f:
-        json.dump(history, f, indent=2, ensure_ascii=False)
+    with HISTORY_FILE.open("w", encoding="utf-8") as file:
+        json.dump(history, file, indent=2, ensure_ascii=False)
+
+    _history_cache = [message.copy() for message in history]
 
 
 def trim_history(history):
@@ -71,7 +104,8 @@ def trim_history(history):
     """
     if len(history) > MAX_HISTORY_MESSAGES:
         system = history[0]
-        history = [system] + history[-MAX_HISTORY_MESSAGES:]
+        retained_messages = MAX_HISTORY_MESSAGES - 1
+        history = [system] + history[-retained_messages:]
     return history
 
 
@@ -80,7 +114,6 @@ def trim_history(history):
 # -------------------------
 
 def call_llm(messages):
-
     client = get_client()
 
     response = client.responses.create(
@@ -98,12 +131,15 @@ def call_llm(messages):
 # -------------------------
 
 def llm_response(user_input: str) -> str:
+    cleaned_input = user_input.strip()
+    if not cleaned_input:
+        return ""
 
     history = load_history()
 
     history.append({
         "role": "user",
-        "content": user_input
+        "content": cleaned_input
     })
 
     history = trim_history(history)
