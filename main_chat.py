@@ -1,105 +1,104 @@
+import uuid
+from pathlib import Path
+
 from faster_whisper import WhisperModel
 
 from process.asr.asr_push_to_talk import record_and_transcribe
+from process.common.runtime_config import AUDIO_DIR
 from process.llm.llm_scr import llm_response
-from process.tts.sovits_ping import sovits_gen, play_audio
-
-from pathlib import Path
-import uuid
+from process.tts.sovits_ping import play_audio, sovits_gen
 
 
-# ----------------------------
-# Utility
-# ----------------------------
+EXIT_COMMANDS = {"exit", "quit", "stop"}
+WHISPER_MODEL_NAME = "base.en"
+WHISPER_DEVICE = "cpu"
+WHISPER_COMPUTE_TYPE = "int8"
 
-def cleanup_audio_files(audio_dir: Path):
+
+def cleanup_generated_audio(audio_dir: Path):
     """
     Remove only generated TTS files.
     Keeps conversation.wav safe.
     """
-    for fp in audio_dir.glob("output_*.wav"):
+    for audio_path in audio_dir.glob("output_*.wav"):
         try:
-            fp.unlink(missing_ok=True)
-        except Exception as e:
-            print(f"[WARN] Could not delete {fp}: {e}")
+            audio_path.unlink(missing_ok=True)
+        except Exception as exc:
+            print(f"[WARN] Could not delete {audio_path}: {exc}")
 
 
-# ----------------------------
-# Startup
-# ----------------------------
-
-print("\n========= Starting Voice Chat =========\n")
-
-audio_dir = Path("audio")
-audio_dir.mkdir(parents=True, exist_ok=True)
-
-print("Loading Whisper model (CPU optimized)...")
-
-whisper_model = WhisperModel(
-    "base.en",      # use small.en if you want better accuracy
-    device="cpu",
-    compute_type="int8"
-)
-
-print("System ready.\n")
+def create_whisper_model() -> WhisperModel:
+    print("Loading Whisper model (CPU optimized)...")
+    return WhisperModel(
+        WHISPER_MODEL_NAME,
+        device=WHISPER_DEVICE,
+        compute_type=WHISPER_COMPUTE_TYPE,
+    )
 
 
-# ----------------------------
-# Main Loop
-# ----------------------------
+def play_response(ai_response: str, audio_dir: Path):
+    output_path = audio_dir / f"output_{uuid.uuid4().hex}.wav"
 
-while True:
+    print("Generating speech...")
+    generated_path = sovits_gen(ai_response, output_path)
+
+    if not generated_path:
+        print("[ERROR] TTS generation failed.\n")
+        return
+
+    print("Playing audio...\n")
     try:
-        conversation_path = audio_dir / "conversation.wav"
-
-        print("Listening...")
-        user_text = record_and_transcribe(
-            whisper_model,
-            conversation_path
-        )
-
-        if not user_text or not user_text.strip():
-            print("No speech detected.\n")
-            continue
-
-        user_text = user_text.strip()
-        print(f"\nUser: {user_text}")
-
-        # Exit condition
-        if user_text.lower() in ["exit", "quit", "stop"]:
-            print("Exiting chat...")
-            break
-
-        # ---------------- LLM ----------------
-        print("Generating response...")
-        ai_response = llm_response(user_text)
-
-        if not ai_response:
-            print("LLM returned empty response.\n")
-            continue
-
-        print(f"AI: {ai_response}")
-
-        # ---------------- TTS ----------------
-        uid = uuid.uuid4().hex
-        output_path = audio_dir / f"output_{uid}.wav"
-
-        print("Generating speech...")
-        generated_path = sovits_gen(ai_response, output_path)
-
-        if not generated_path:
-            print("[ERROR] TTS generation failed.\n")
-            continue
-
-        print("Playing audio...\n")
         play_audio(generated_path)
+    finally:
+        try:
+            Path(generated_path).unlink(missing_ok=True)
+        except Exception as exc:
+            print(f"[WARN] Could not delete {generated_path}: {exc}")
 
-        # Cleanup generated audio (not conversation file)
-        cleanup_audio_files(audio_dir)
 
-    except KeyboardInterrupt:
-        print("\nInterrupted by user. Exiting.")
-        break
+def run_chat():
+    print("\n========= Starting Voice Chat =========\n")
 
-    except Exception as e:
-        print(f"\n[ERROR] {e}\n")
+    AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+    cleanup_generated_audio(AUDIO_DIR)
+
+    whisper_model = create_whisper_model()
+    conversation_path = AUDIO_DIR / "conversation.wav"
+
+    print("System ready.\n")
+
+    while True:
+        try:
+            print("Listening...")
+            user_text = record_and_transcribe(whisper_model, conversation_path)
+
+            if not user_text or not user_text.strip():
+                print("No speech detected.\n")
+                continue
+
+            user_text = user_text.strip()
+            print(f"\nUser: {user_text}")
+
+            if user_text.casefold() in EXIT_COMMANDS:
+                print("Exiting chat...")
+                break
+
+            print("Generating response...")
+            ai_response = llm_response(user_text)
+
+            if not ai_response:
+                print("LLM returned empty response.\n")
+                continue
+
+            print(f"AI: {ai_response}")
+            play_response(ai_response, AUDIO_DIR)
+
+        except KeyboardInterrupt:
+            print("\nInterrupted by user. Exiting.")
+            break
+        except Exception as exc:
+            print(f"\n[ERROR] {exc}\n")
+
+
+if __name__ == "__main__":
+    run_chat()
