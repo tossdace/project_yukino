@@ -235,3 +235,7 @@ MIT License
 
 This project is for research and educational purposes.
 Ensure you comply with local laws when cloning voices or recording audio.
+
+dev note
+
+brooooooo iam done
