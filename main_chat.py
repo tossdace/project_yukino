@@ -1,3 +1,4 @@
+import argparse
 import uuid
 from pathlib import Path
 
@@ -56,7 +57,7 @@ def play_response(ai_response: str, audio_dir: Path):
             print(f"[WARN] Could not delete {generated_path}: {exc}")
 
 
-def run_chat():
+def run_cli_chat():
     print("\n========= Starting Voice Chat =========\n")
 
     AUDIO_DIR.mkdir(parents=True, exist_ok=True)
@@ -100,5 +101,23 @@ def run_chat():
             print(f"\n[ERROR] {exc}\n")
 
 
+def main():
+    parser = argparse.ArgumentParser(description="Yukino voice assistant")
+    parser.add_argument(
+        "--cli",
+        action="store_true",
+        help="run the original terminal interface instead of the desktop UI",
+    )
+    args = parser.parse_args()
+
+    if args.cli:
+        run_cli_chat()
+        return
+
+    from process.ui.desktop_app import launch_desktop_ui
+
+    launch_desktop_ui()
+
+
 if __name__ == "__main__":
-    run_chat()
+    main()
